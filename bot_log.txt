@@ -1,0 +1,4 @@
+INFO:__main__:Loaded 536 lots
+INFO:__main__:Bot starting...
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @ipoteka0pv_bot id=8133826323 - 'Êגאנעטנא בוח ÏÂ'
