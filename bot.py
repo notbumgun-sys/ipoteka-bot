@@ -17,7 +17,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import (
     BOT_TOKEN, WEBHOOK_URL, MANAGER_LINK, MANAGER_USERNAME,
-    SITE_URL, NOTIFY_CHAT_ID, HERO_RENDER
+    MANAGER_PHONE, SITE_URL, NOTIFY_CHAT_ID, HERO_RENDER
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -251,8 +251,8 @@ async def quiz_rooms(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="до 25 000 ₽", callback_data="budget_25000"),
-             InlineKeyboardButton(text="25–40 000 ₽", callback_data="budget_40000")],
-            [InlineKeyboardButton(text="40–60 000 ₽", callback_data="budget_60000"),
+             InlineKeyboardButton(text="26 000–40 000 ₽", callback_data="budget_40000")],
+            [InlineKeyboardButton(text="41 000–60 000 ₽", callback_data="budget_60000"),
              InlineKeyboardButton(text="Не важно", callback_data="budget_any")],
             [InlineKeyboardButton(text="← Назад", callback_data="how_it_works")],
         ])
@@ -341,8 +341,9 @@ async def show_apartment(message, state: FSMContext, index: int):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         nav_buttons,
-        [InlineKeyboardButton(text="✍️ Написать менеджеру", url=MANAGER_LINK)],
-        [InlineKeyboardButton(text="📞 Оставить номер — перезвоним", callback_data="leave_phone")],
+        [InlineKeyboardButton(text="📞 Позвонить", url=f"tel:{MANAGER_PHONE}"),
+         InlineKeyboardButton(text="✍️ Написать", url=MANAGER_LINK)],
+        [InlineKeyboardButton(text="📱 Оставить номер — перезвоним", callback_data="leave_phone")],
         [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
     ])
 
@@ -373,8 +374,9 @@ async def send_final_cta(message, state: FSMContext):
         f"⬇️ <b>Выберите удобный способ связи:</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✍️ Написать менеджеру", url=MANAGER_LINK)],
-            [InlineKeyboardButton(text="📞 Оставить номер — перезвоним", callback_data="leave_phone")],
+            [InlineKeyboardButton(text="📞 Позвонить", url=f"tel:{MANAGER_PHONE}"),
+             InlineKeyboardButton(text="✍️ Написать", url=MANAGER_LINK)],
+            [InlineKeyboardButton(text="📱 Оставить номер — перезвоним", callback_data="leave_phone")],
             [InlineKeyboardButton(text="🌐 Все квартиры на сайте", url=SITE_URL)],
             [InlineKeyboardButton(text="🔄 Подобрать заново", callback_data="how_it_works")],
         ])
