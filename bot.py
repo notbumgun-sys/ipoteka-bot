@@ -285,7 +285,11 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
             results = find_lots()
 
     total_count = len(results)
-    top = results[:TOP_RESULTS]
+    if len(results) >= 3:
+        mid = len(results) // 2
+        top = [results[0], results[mid], results[-1]]
+    else:
+        top = results
 
     lot_ids = [lot["id"] for lot in top]
     await state.update_data(lot_ids=lot_ids, browse_index=0, total_count=total_count)
