@@ -345,7 +345,7 @@ async def show_apartment(message, state: FSMContext, index: int):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         nav_buttons,
-        [InlineKeyboardButton(text="📞 Позвонить", url=f"tel:{MANAGER_PHONE}"),
+        [InlineKeyboardButton(text="📞 Позвонить", callback_data="show_phone"),
          InlineKeyboardButton(text="✍️ Написать", url=MANAGER_LINK)],
         [InlineKeyboardButton(text="📱 Оставить номер — перезвоним", callback_data="leave_phone")],
         [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
@@ -378,7 +378,7 @@ async def send_final_cta(message, state: FSMContext):
         f"⬇️ <b>Выберите удобный способ связи:</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📞 Позвонить", url=f"tel:{MANAGER_PHONE}"),
+            [InlineKeyboardButton(text="📞 Позвонить", callback_data="show_phone"),
              InlineKeyboardButton(text="✍️ Написать", url=MANAGER_LINK)],
             [InlineKeyboardButton(text="📱 Оставить номер — перезвоним", callback_data="leave_phone")],
             [InlineKeyboardButton(text="🌐 Все квартиры на сайте", url=SITE_URL)],
@@ -396,6 +396,17 @@ async def browse(callback: CallbackQuery, state: FSMContext):
     user = callback.from_user
     track_event(user.id, user.username, "browse", {"index": index})
     await show_apartment(callback.message, state, index)
+
+@router.callback_query(F.data == "show_phone")
+async def show_phone(callback: CallbackQuery):
+    if is_duplicate_click(callback.id):
+        await callback.answer()
+        return
+    await callback.answer()
+    await callback.message.answer(
+        f"📞 Позвоните менеджеру:\n\n<b>{MANAGER_PHONE}</b>\n\nРаботаем ежедневно 9:00 — 21:00",
+        parse_mode="HTML"
+    )
 
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery):
