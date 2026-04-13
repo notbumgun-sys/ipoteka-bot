@@ -33,7 +33,6 @@ async def get_session():
     return _http_session
 
 # === Constants ===
-PRICE_MARKUP = 1.20
 MAX_LOAN_AMOUNT = 12_000_000
 TOP_RESULTS = 3
 
@@ -62,8 +61,7 @@ def format_price(price):
     return f"{price:,.0f}".replace(",", " ")
 
 def adjusted_payment(lot):
-    p = lot.get("mortgagePayment", 0)
-    return int(p * PRICE_MARKUP) if p else 0
+    return lot.get("mortgagePayment", 0) or 0
 
 def finishing_label(lot):
     return FINISHING_MAP.get(lot.get("finishing"), "")
@@ -88,7 +86,7 @@ def find_lots(rooms=None, max_payment=None):
         # No 3-room apartments
         if lot.get("rooms") == 3:
             continue
-        if lot.get("price", 0) * PRICE_MARKUP > MAX_LOAN_AMOUNT:
+        if lot.get("price", 0) > MAX_LOAN_AMOUNT:
             continue
         if max_payment and adjusted_payment(lot) > max_payment:
             continue
