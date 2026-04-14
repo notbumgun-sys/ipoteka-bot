@@ -78,6 +78,30 @@ def plan_url(lot):
         url += "@png"
     return url
 
+def developer_url(lot):
+    return lot.get("developerUrl") or lot.get("developer_url") or ""
+
+def lot_payload(lot):
+    if not lot:
+        return {}
+    return {
+        "lot_id": lot.get("id", ""),
+        "lot_info": f"{rooms_label(lot['rooms'])}, {lot['area']} м², кв. №{lot['number']}, корп. {lot['corpus']}",
+        "lot_number": lot.get("number", ""),
+        "lot_rooms": lot.get("rooms", ""),
+        "lot_area": lot.get("area", ""),
+        "lot_price": lot.get("price", ""),
+        "lot_corpus": lot.get("corpus", ""),
+        "developer_url": developer_url(lot),
+    }
+
+def extract_start_param(message: Message):
+    text = message.text or ""
+    parts = text.split(maxsplit=1)
+    if len(parts) > 1:
+        return parts[1].strip()
+    return ""
+
 def find_lots(rooms=None, max_payment=None):
     results = []
     for lot in lots_data:
@@ -95,14 +119,24 @@ def find_lots(rooms=None, max_payment=None):
     return results
 
 # === Event tracking (fire-and-forget) ===
-def track_event(user_id, username, event_type, extra=None):
+def track_event(user_id, username, event_type, extra=None, lot=None, phone="", name="", journey_id=""):
+    lot_meta = lot_payload(lot)
+    current_journey = journey_id or f"tg:{user_id}"
     payload = {
         "source": "bot",
+        "channel": "telegram_bot",
         "event_type": event_type,
+        "session_id": current_journey,
+        "journey_id": current_journey,
+        "profile_key": f"tg:{user_id}",
         "telegram_user_id": user_id,
         "telegram_username": username or "",
+        "name": name or "",
+        "phone": phone or "",
+        "page_url": "https://t.me/ipoteka0pv_bot",
         "timestamp": datetime.now().isoformat(),
-        "extra": json.dumps(extra or {}, ensure_ascii=False),
+        "extra": extra or {},
+        **lot_meta,
     }
     async def _send():
         try:
@@ -113,7 +147,9 @@ def track_event(user_id, username, event_type, extra=None):
     asyncio.create_task(_send())
 
 # === Notify manager ===
-async def notify_lead(bot: Bot, user_id, username, name, phone, lot_info=""):
+async def notify_lead(bot: Bot, user_id, username, name, phone, lot=None):
+    lot_meta = lot_payload(lot)
+    lot_info = lot_meta.get("lot_info", "")
     text = (
         f"🔥 <b>Новая заявка из бота!</b>\n\n"
         f"👤 {name or 'Не указано'}\n"
@@ -128,10 +164,16 @@ async def notify_lead(bot: Bot, user_id, username, name, phone, lot_info=""):
         logger.error(f"Notify error: {e}")
 
     payload = {
+        "source": "bot",
+        "channel": "telegram_bot",
+        "session_id": f"tg:{user_id}",
+        "journey_id": f"tg:{user_id}",
+        "profile_key": f"tg:{user_id}",
         "name": name or "",
         "phone": phone,
-        "lot_id": "",
-        "lot_info": lot_info,
+        "telegram_user_id": user_id,
+        "telegram_username": username or "",
+        **lot_meta,
         "project": "1-й Химкинский",
         "utm_source": "telegram_bot",
         "utm_medium": "bot",
@@ -172,8 +214,12 @@ router = Router()
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     user = message.from_user
+    start_param = extract_start_param(message)
     await state.clear()
-    track_event(user.id, user.username, "start")
+    await state.update_data(start_param=start_param)
+    track_event(user.id, user.username, "start", {
+        "start_param": start_param,
+    })
 
     min_payment = 0
     payments = [adjusted_payment(l) for l in lots_data if adjusted_payment(l) > 0 and l.get("rooms") != 3]
@@ -318,6 +364,17 @@ async def show_apartment(message, state: FSMContext, index: int):
         return
 
     await state.update_data(browse_index=index)
+    track_event(
+        message.chat.id,
+        getattr(message.chat, "username", None),
+        "lot_shown",
+        {
+            "index": index,
+            "shown_total": total_shown,
+            "results_total": total_count,
+        },
+        lot=lot,
+    )
 
     payment = adjusted_payment(lot)
     payment_str = f"от {format_price(payment)} ₽/мес" if payment else "уточняйте"
@@ -392,7 +449,7 @@ async def browse(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     index = int(callback.data.replace("browse_", ""))
     user = callback.from_user
-    track_event(user.id, user.username, "browse", {"index": index})
+    track_event(user.id, user.username, "browse_click", {"index": index})
     await show_apartment(callback.message, state, index)
 
 @router.callback_query(F.data == "show_phone")
@@ -401,6 +458,7 @@ async def show_phone(callback: CallbackQuery):
         await callback.answer()
         return
     await callback.answer()
+    track_event(callback.from_user.id, callback.from_user.username, "phone_revealed")
     await callback.message.answer(
         f"📞 Позвоните менеджеру:\n\n<b>{MANAGER_PHONE}</b>\n\nРаботаем ежедневно 9:00 — 21:00",
         parse_mode="HTML"
@@ -452,14 +510,12 @@ async def got_contact(message: Message, state: FSMContext, bot: Bot):
     name = data.get("lead_name") or f"{message.contact.first_name or ''} {message.contact.last_name or ''}".strip()
     lot_ids = data.get("lot_ids", [])
     browse_index = data.get("browse_index", 0)
-    lot_info = ""
+    lot = None
     if lot_ids and browse_index < len(lot_ids):
         lot = next((l for l in lots_data if l["id"] == lot_ids[browse_index]), None)
-        if lot:
-            lot_info = f"{rooms_label(lot['rooms'])}, {lot['area']} м², корп. {lot['corpus']}"
 
-    track_event(user.id, user.username, "lead_phone", {"phone": phone, "name": name})
-    await notify_lead(bot, user.id, user.username, name, phone, lot_info)
+    track_event(user.id, user.username, "lead_phone", {"name": name}, lot=lot, phone=phone, name=name)
+    await notify_lead(bot, user.id, user.username, name, phone, lot)
 
     await message.answer(
         "✅ <b>Спасибо! Ваша заявка принята.</b>\n\n"
@@ -490,17 +546,15 @@ async def got_phone_text(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     lot_ids = data.get("lot_ids", [])
     browse_index = data.get("browse_index", 0)
-    lot_info = ""
+    lot = None
     if lot_ids and browse_index < len(lot_ids):
         lot = next((l for l in lots_data if l["id"] == lot_ids[browse_index]), None)
-        if lot:
-            lot_info = f"{rooms_label(lot['rooms'])}, {lot['area']} м², корп. {lot['corpus']}"
 
     data = await state.get_data()
     name = data.get("lead_name") or user.first_name or ""
 
-    track_event(user.id, user.username, "lead_phone_manual", {"phone": phone, "name": name})
-    await notify_lead(bot, user.id, user.username, name, phone, lot_info)
+    track_event(user.id, user.username, "lead_phone_manual", {"name": name}, lot=lot, phone=phone, name=name)
+    await notify_lead(bot, user.id, user.username, name, phone, lot)
 
     await message.answer(
         "✅ <b>Спасибо! Ваша заявка принята.</b>\n\n"
