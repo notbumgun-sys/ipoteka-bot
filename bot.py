@@ -174,7 +174,7 @@ async def notify_lead(bot: Bot, user_id, username, name, phone, lot=None):
         "telegram_user_id": user_id,
         "telegram_username": username or "",
         **lot_meta,
-        "project": "1-й Химкинский",
+        "project": "",
         "utm_source": "telegram_bot",
         "utm_medium": "bot",
         "page_url": "https://t.me/ipoteka0pv_bot",
@@ -387,7 +387,7 @@ async def show_apartment(message, state: FSMContext, index: int):
         f"Сдача: {lot.get('deadlineLabel', '—')}\n\n"
         f"💰 Платёж: <b>{payment_str}</b>\n"
         f"Семейная ипотека от 6%\n\n"
-        f"📍 Химки, 7 км от МКАД\n\n"
+        f"📍 7 км от МКАД\n\n"
         f"<i>{index + 1} из {total_shown} (всего {total_count})</i>"
     )
 
