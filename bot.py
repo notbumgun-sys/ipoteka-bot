@@ -472,7 +472,7 @@ async def show_apartment(message, state: FSMContext, index: int):
     travel = PROJECT_TRAVEL.get(complex_name)
     if travel:
         mkad, station = travel
-        location_line = f"📍 {complex_name} · {mkad}\n{station}"
+        location_line = f"📍 {mkad}\n{station}"
     else:
         location_line = "📍 Москва и Подмосковье"
 
