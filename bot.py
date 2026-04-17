@@ -93,7 +93,16 @@ def format_price(price):
     return f"{price:,.0f}".replace(",", " ")
 
 def adjusted_payment(lot):
-    return lot.get("mortgagePayment", 0) or 0
+    p = lot.get("mortgagePayment", 0) or 0
+    if p:
+        return p
+    # Fallback: estimate from price (6% family mortgage, 30 years, 0% down)
+    price = lot.get("price", 0) or 0
+    if not price:
+        return 0
+    r = 0.06 / 12
+    n = 360
+    return round(price * r * (1 + r) ** n / ((1 + r) ** n - 1))
 
 def finishing_label(lot):
     return FINISHING_MAP.get(lot.get("finishing"), "")
@@ -575,7 +584,7 @@ async def show_apartment(message, state: FSMContext, index: int):
     )
 
     payment = adjusted_payment(lot)
-    payment_str = f"от {format_price(payment)} ₽/мес" if payment else "уточняйте"
+    payment_str = f"от {format_price(payment)} ₽/мес" if payment else "по запросу"
     finish = finishing_label(lot)
 
     complex_name = lot.get("complex", "")
