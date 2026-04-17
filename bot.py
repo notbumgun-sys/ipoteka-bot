@@ -164,27 +164,54 @@ def find_lots(rooms=None, max_payment=None, district=None):
     return results
 
 def pick_diverse_lots(results, n=5):
-    """Pick n lots: prefer one per complex, fill remaining by price spread."""
+    """Round-robin by complex, then by rooms type within complex.
+    Pass 1: one per unique complex (all swipes from different ЖК).
+    Pass 2+: repeat complex only with a different rooms type.
+    Never: same (complex, rooms) pair twice.
+    Fallback: fill any remaining slots by price spread."""
     if len(results) <= n:
         return results
     from collections import defaultdict
-    by_complex = defaultdict(list)
-    for lot in results:
-        by_complex[lot.get("complex", "")].append(lot)
-    # Cheapest representative from each complex
-    reps = sorted([lots[0] for lots in by_complex.values()], key=lambda x: x.get("price", 0))
-    if len(reps) >= n:
-        step = (len(reps) - 1) / (n - 1)
-        return [reps[round(i * step)] for i in range(n)]
-    # Fewer complexes than n — fill with price-spread from full list
-    selected_ids = {lot["id"] for lot in reps}
-    extra = [l for l in results if l["id"] not in selected_ids]
-    needed = n - len(reps)
-    if extra:
-        step = (len(extra) - 1) / max(needed - 1, 1)
-        extras = [extra[min(round(i * step), len(extra) - 1)] for i in range(needed)]
-        reps = sorted(reps + extras, key=lambda x: x.get("price", 0))
-    return reps[:n]
+    # Group: complex -> rooms -> [lots sorted by price asc]
+    by_complex = defaultdict(lambda: defaultdict(list))
+    for lot in sorted(results, key=lambda x: x.get("price", 0)):
+        by_complex[lot.get("complex", "")][lot.get("rooms", -1)].append(lot)
+    # Order complexes by their cheapest lot
+    complex_order = sorted(
+        by_complex.keys(),
+        key=lambda c: min(v[0]["price"] for v in by_complex[c].values())
+    )
+    selected = []
+    selected_ids = set()
+    used_rooms_per_complex = defaultdict(set)
+    while len(selected) < n:
+        added = 0
+        for c in complex_order:
+            if len(selected) >= n:
+                break
+            available = [r for r in sorted(by_complex[c].keys())
+                         if r not in used_rooms_per_complex[c]]
+            if not available:
+                continue
+            rooms_type = available[0]
+            candidates = [l for l in by_complex[c][rooms_type] if l["id"] not in selected_ids]
+            if candidates:
+                lot = candidates[0]
+                selected.append(lot)
+                selected_ids.add(lot["id"])
+                used_rooms_per_complex[c].add(rooms_type)
+                added += 1
+        if added == 0:
+            break
+    # Fallback: fill remaining by price spread ignoring diversity
+    if len(selected) < n:
+        extra = [l for l in results if l["id"] not in selected_ids]
+        needed = n - len(selected)
+        if extra:
+            step = (len(extra) - 1) / max(needed - 1, 1)
+            extras = [extra[min(round(i * step), len(extra) - 1)] for i in range(needed)]
+            selected.extend(extras)
+    return selected[:n]
 
 def district_counts(rooms=None, max_payment=None):
     counts = {"any": len(find_lots(rooms=rooms, max_payment=max_payment))}
