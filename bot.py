@@ -155,16 +155,27 @@ def find_lots(rooms=None, max_payment=None, district=None):
     return results
 
 def pick_diverse_lots(results, n=5):
-    """One cheapest lot per complex, spread evenly across price range."""
+    """Pick n lots: prefer one per complex, fill remaining by price spread."""
+    if len(results) <= n:
+        return results
     from collections import defaultdict
     by_complex = defaultdict(list)
     for lot in results:
         by_complex[lot.get("complex", "")].append(lot)
+    # Cheapest representative from each complex
     reps = sorted([lots[0] for lots in by_complex.values()], key=lambda x: x.get("price", 0))
-    if len(reps) <= n:
-        return reps
-    step = (len(reps) - 1) / (n - 1)
-    return [reps[round(i * step)] for i in range(n)]
+    if len(reps) >= n:
+        step = (len(reps) - 1) / (n - 1)
+        return [reps[round(i * step)] for i in range(n)]
+    # Fewer complexes than n — fill with price-spread from full list
+    selected_ids = {lot["id"] for lot in reps}
+    extra = [l for l in results if l["id"] not in selected_ids]
+    needed = n - len(reps)
+    if extra:
+        step = (len(extra) - 1) / max(needed - 1, 1)
+        extras = [extra[min(round(i * step), len(extra) - 1)] for i in range(needed)]
+        reps = sorted(reps + extras, key=lambda x: x.get("price", 0))
+    return reps[:n]
 
 def district_counts(rooms=None, max_payment=None):
     counts = {"any": len(find_lots(rooms=rooms, max_payment=max_payment))}
@@ -416,7 +427,56 @@ async def change_budget(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Quiz.waiting_budget)
 
-# --- SCREEN 4: District selection (step 3/4) ---
+# --- Shared: find results and show cards ---
+async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_val,
+                           max_payment, budget_choice, district):
+    d = district if district != "any" else None
+    results = find_lots(rooms=rooms, max_payment=max_payment, district=d)
+    exact_count = len(results)
+
+    track_event(user.id, user.username, "step_quiz_results", {
+        "rooms": rooms_label_val, "budget": budget_choice,
+        "district": district, "count": exact_count,
+    })
+
+    fallback_used = False
+    if not results:
+        fallback_used = True
+        results = find_lots(rooms=rooms, district=d)
+        if not results:
+            results = find_lots()
+
+    total_count = len(results)
+    top = pick_diverse_lots(results, n=TOP_RESULTS)
+    lot_ids = [lot["id"] for lot in top]
+
+    await state.update_data(lot_ids=lot_ids, browse_index=0, total_count=total_count,
+                            district=district)
+    await state.set_state(Quiz.browsing)
+
+    if fallback_used and budget_choice != "any":
+        min_payment = adjusted_payment(results[0]) if results else 0
+        budget_labels = {"25000": "до 25 000 ₽", "40000": "до 40 000 ₽", "60000": "до 60 000 ₽"}
+        budget_str = budget_labels.get(budget_choice, f"до {budget_choice} ₽")
+        await message.answer(
+            f"💡 С платежом <b>{budget_str}</b> пока нет точных совпадений.\n\n"
+            f"Показываем ближайшие варианты — платёж от <b>{format_price(min_payment)} ₽/мес</b>.\n"
+            f"Это всё равно выгоднее аренды 🏠",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← Другой бюджет", callback_data="change_budget")],
+            ])
+        )
+    else:
+        await message.answer(
+            f"🏠 <b>Нашли {total_count} квартир</b>\n"
+            f"Показываем {len(top)} вариантов — листайте и выбирайте:",
+            parse_mode="HTML"
+        )
+
+    await show_apartment(message, state, 0)
+
+# --- SCREEN 4: District selection (step 3/4) or auto-skip ---
 @router.callback_query(F.data.startswith("budget_"))
 async def quiz_budget(callback: CallbackQuery, state: FSMContext):
     if is_duplicate_click(callback.id):
@@ -436,7 +496,16 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
     })
 
     dcounts = district_counts(rooms=rooms, max_payment=max_payment)
+    active = [k for k in DISTRICTS if dcounts[k] > 0]
 
+    # Auto-skip district step if only 0-1 districts have results
+    if len(active) <= 1:
+        district = active[0] if active else "any"
+        await _do_show_results(callback.message, state, user, rooms,
+                               data.get("rooms_label", ""), max_payment, choice, district)
+        return
+
+    # Show district selection
     buttons = []
     for key, info in DISTRICTS.items():
         n = dcounts[key]
@@ -446,11 +515,10 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
                 callback_data=f"district_{key}"
             )])
     total = dcounts["any"]
-    if total > 0:
-        buttons.append([InlineKeyboardButton(
-            text=f"🗺 Все районы · {total} вар.",
-            callback_data="district_any"
-        )])
+    buttons.append([InlineKeyboardButton(
+        text=f"🗺 Все районы · {total} вар.",
+        callback_data="district_any"
+    )])
     buttons.append([InlineKeyboardButton(text="← Назад", callback_data="change_budget")])
 
     await callback.message.answer(
@@ -472,60 +540,10 @@ async def quiz_district(callback: CallbackQuery, state: FSMContext):
     district = callback.data.replace("district_", "")
 
     data = await state.get_data()
-    rooms = data.get("rooms")
-    max_payment = data.get("max_payment")
-    budget_choice = data.get("budget_choice", "any")
-
-    d = district if district != "any" else None
-    results = find_lots(rooms=rooms, max_payment=max_payment, district=d)
-    exact_count = len(results)
-
-    track_event(user.id, user.username, "step_quiz_results", {
-        "rooms": data.get("rooms_label"), "budget": budget_choice,
-        "district": district, "count": exact_count,
-    })
-
-    fallback_used = False
-    if not results:
-        fallback_used = True
-        results = find_lots(rooms=rooms, district=d)
-        if not results:
-            results = find_lots()
-
-    total_count = len(results)
-    top = pick_diverse_lots(results, n=TOP_RESULTS)
-
-    lot_ids = [lot["id"] for lot in top]
-    await state.update_data(lot_ids=lot_ids, browse_index=0, total_count=total_count,
-                            district=district)
-    await state.set_state(Quiz.browsing)
-
-    if fallback_used and budget_choice != "any":
-        min_payment = adjusted_payment(results[0]) if results else 0
-        budget_labels = {"25000": "до 25 000 ₽", "40000": "до 40 000 ₽", "60000": "до 60 000 ₽"}
-        budget_str = budget_labels.get(budget_choice, f"до {budget_choice} ₽")
-        await callback.message.answer(
-            f"💡 С платежом <b>{budget_str}</b> в этом районе пока нет точных совпадений.\n\n"
-            f"Показываем ближайшие варианты — платёж от <b>{format_price(min_payment)} ₽/мес</b>.\n"
-            f"Это всё равно выгоднее аренды 🏠",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="← Другой бюджет", callback_data="change_budget")],
-            ])
-        )
-    else:
-        n_districts = sum(1 for k in DISTRICTS if find_lots(rooms=rooms, max_payment=max_payment, district=k))
-        district_label = ""
-        if district != "any" and district in DISTRICTS:
-            district_label = f" в районе «{DISTRICTS[district]['label']}»"
-        await callback.message.answer(
-            f"🏠 <b>Нашли {total_count} квартир{district_label}</b>\n"
-            f"Показываем {len(top)} — из разных жилых комплексов:\n\n"
-            "<i>Шаг 4 из 4 — листайте и выбирайте</i>",
-            parse_mode="HTML"
-        )
-
-    await show_apartment(callback.message, state, 0)
+    await _do_show_results(callback.message, state, user,
+                           data.get("rooms"), data.get("rooms_label", ""),
+                           data.get("max_payment"), data.get("budget_choice", "any"),
+                           district)
 
 # --- Apartment card ---
 async def show_apartment(message, state: FSMContext, index: int):
