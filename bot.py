@@ -323,6 +323,38 @@ async def quiz_rooms(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Quiz.waiting_budget)
 
+# --- Вернуться к выбору бюджета (из фолбэк-сообщения) ---
+@router.callback_query(F.data == "change_budget")
+async def change_budget(callback: CallbackQuery, state: FSMContext):
+    if is_duplicate_click(callback.id):
+        await callback.answer()
+        return
+    await callback.answer()
+    data = await state.get_data()
+    rooms = data.get("rooms")
+    rooms_label = data.get("rooms_label", "")
+
+    counts = budget_counts(rooms=rooms)
+
+    def btn(label, key):
+        n = counts[key]
+        hint = f" · {n} вар." if n > 0 else " · нет"
+        return InlineKeyboardButton(text=f"{label}{hint}", callback_data=f"budget_{key}")
+
+    await callback.message.answer(
+        "💰 <b>Выберите другой бюджет:</b>\n\n"
+        "<i>Шаг 2 из 3</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [btn("до 25 000 ₽", "25000"),
+             btn("26 000–40 000 ₽", "40000")],
+            [btn("41 000–60 000 ₽", "60000"),
+             btn("Не важно", "any")],
+            [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
+        ])
+    )
+    await state.set_state(Quiz.waiting_budget)
+
 # --- SCREEN 4: Results (step 3/3) ---
 @router.callback_query(F.data.startswith("budget_"))
 async def quiz_budget(callback: CallbackQuery, state: FSMContext):
@@ -338,12 +370,15 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
     rooms = data.get("rooms")
 
     results = find_lots(rooms=rooms, max_payment=max_payment)
+    exact_count = len(results)
 
     track_event(user.id, user.username, "step_quiz_results", {
-        "rooms": data.get("rooms_label"), "budget": choice, "count": len(results)
+        "rooms": data.get("rooms_label"), "budget": choice, "count": exact_count
     })
 
+    fallback_used = False
     if not results:
+        fallback_used = True
         results = find_lots(rooms=rooms)
         if not results:
             results = find_lots()
@@ -356,15 +391,34 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
         top = results
 
     lot_ids = [lot["id"] for lot in top]
-    await state.update_data(lot_ids=lot_ids, browse_index=0, total_count=total_count)
+    await state.update_data(lot_ids=lot_ids, browse_index=0, total_count=total_count,
+                            rooms_label=data.get("rooms_label"), budget_choice=choice)
     await state.set_state(Quiz.browsing)
 
-    await callback.message.answer(
-        f"🏠 <b>Нашли {total_count} квартир по вашим параметрам!</b>\n"
-        f"Вот топ-{len(top)} лучших:\n\n"
-        "<i>Шаг 3 из 3 — листайте и выбирайте</i>",
-        parse_mode="HTML"
-    )
+    if fallback_used and choice != "any":
+        min_payment = adjusted_payment(results[0]) if results else 0
+        budget_labels = {
+            "25000": "до 25 000 ₽",
+            "40000": "до 40 000 ₽",
+            "60000": "до 60 000 ₽",
+        }
+        budget_str = budget_labels.get(choice, f"до {choice} ₽")
+        await callback.message.answer(
+            f"💡 С платежом <b>{budget_str}</b> пока нет точных совпадений.\n\n"
+            f"Показываем ближайшие варианты — платёж от <b>{format_price(min_payment)} ₽/мес</b>.\n"
+            f"Это всё равно выгоднее аренды 🏠",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← Другой бюджет", callback_data="change_budget")],
+            ])
+        )
+    else:
+        await callback.message.answer(
+            f"🏠 <b>Нашли {total_count} квартир по вашим параметрам!</b>\n"
+            f"Вот топ-{len(top)} лучших:\n\n"
+            "<i>Шаг 3 из 3 — листайте и выбирайте</i>",
+            parse_mode="HTML"
+        )
 
     await show_apartment(callback.message, state, 0)
 
