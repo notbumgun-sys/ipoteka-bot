@@ -376,15 +376,13 @@ async def how_it_works(callback: CallbackQuery, state: FSMContext):
     track_event(user.id, user.username, "step_how_it_works")
 
     await callback.message.answer(
-        "💡 <b>Как купить квартиру без первоначального взноса:</b>\n\n"
-        "1️⃣ Оставьте заявку — мы подберём подходящую квартиру и окажем содействие в одобрении ипотеки\n"
-        "2️⃣ После одобрения бронируем квартиру и сопровождаем вас на всех этапах сделки\n"
-        "3️⃣ Если понадобится небольшая сумма на оформление — можно взять потребкредит после одобрения\n"
-        "4️⃣ Получаете ключи 🏠\n\n"
-        "Это официальная программа от застройщика.\n\n"
-        "ℹ️ <i>Семейная ипотека от 6% (дети до 7 лет). "
-        "На каждом этапе вам поможет менеджер — бесплатно.</i>\n\n"
-        "Подберём под вас. Сколько комнат рассматриваете? 👇\n"
+        "💡 <b>Как это работает — без подвоха:</b>\n\n"
+        "1️⃣ Отвечаешь на 3 вопроса — подбираем квартиры под твой платёж\n"
+        "2️⃣ Менеджер проверяет твою ситуацию и помогает одобрить ипотеку\n"
+        "3️⃣ Бронируем, сопровождаем на всех этапах, передаём ключи 🏠\n\n"
+        "<b>Для тебя это полностью бесплатно</b> — мы работаем напрямую с застройщиком.\n"
+        "Официальная программа. Государственная льготная ипотека от 6%.\n\n"
+        "Сколько комнат рассматриваешь? 👇\n"
         "<i>Шаг 1 из 4</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -507,8 +505,8 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
         )
     else:
         await message.answer(
-            f"🏠 <b>Нашли {total_count} квартир</b>\n"
-            f"Показываем {len(top)} вариантов — листайте и выбирайте:",
+            f"🔥 <b>Шаг 4 из 4 — нашли {total_count} вариантов под твой платёж!</b>\n\n"
+            f"Показываем {len(top)} лучших из разных ЖК — листай и выбирай 👇",
             parse_mode="HTML"
         )
 
@@ -640,7 +638,7 @@ async def show_apartment(message, state: FSMContext, index: int):
         f"Отделка: {finish}\n"
         f"Сдача: {lot.get('deadlineLabel', '—')}\n\n"
         f"💰 Платёж: <b>{payment_str}</b>\n"
-        f"Семейная ипотека от 6%\n\n"
+        f"Льготная ипотека от 6%\n\n"
         f"{location_line}\n\n"
         f"<i>{index + 1} из {total_shown} (всего {total_count})</i>"
     )
@@ -682,13 +680,30 @@ async def show_apartment(message, state: FSMContext, index: int):
 async def send_final_cta(message, state: FSMContext):
     data = await state.get_data()
     total_count = data.get("total_count", 0)
-    shown = len(data.get("lot_ids", []))
+    lot_ids = data.get("lot_ids", [])
+    shown = len(lot_ids)
+
+    # Dynamic emotional close: last shown lot's payment + location
+    emotional = ""
+    if lot_ids:
+        last_lot = next((l for l in lots_data if l["id"] == lot_ids[-1]), None)
+        if last_lot:
+            payment = adjusted_payment(last_lot)
+            travel = PROJECT_TRAVEL.get(last_lot.get("complex", ""))
+            if payment and travel:
+                _, station = travel
+                emotional = (
+                    f"💡 Смотри: <b>{format_price(payment)} ₽/мес</b> — "
+                    f"и это уже твоя квартира, не чужая.\n"
+                    f"{station}\n\n"
+                )
 
     await message.answer(
-        f"👆 <b>Показали {shown} из {total_count} квартир по вашим параметрам.</b>\n\n"
-        f"Менеджер подберёт остальные под вас, рассчитает точный платёж и поможет с одобрением.\n\n"
-        f"Консультация бесплатная, без обязательств.\n\n"
-        f"⬇️ <b>Выберите удобный способ связи:</b>",
+        f"👆 <b>Показали {shown} из {total_count} вариантов.</b>\n\n"
+        f"{emotional}"
+        f"Менеджер <b>бесплатно</b> подберёт остальные, рассчитает точный платёж и поможет с одобрением.\n"
+        f"Никаких обязательств.\n\n"
+        f"⬇️ <b>Как удобнее связаться?</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📞 Позвонить", callback_data="show_phone"),
