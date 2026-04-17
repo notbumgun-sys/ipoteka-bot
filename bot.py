@@ -77,7 +77,7 @@ lots_data = []
 def load_lots():
     global lots_data
     try:
-        with open(LOTS_PATH, "r", encoding="utf-8") as f:
+        with open(LOTS_PATH, "r", encoding="utf-8-sig") as f:
             lots_data = json.load(f)
         logger.info(f"Loaded {len(lots_data)} lots")
     except Exception as e:
