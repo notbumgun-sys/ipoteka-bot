@@ -118,6 +118,19 @@ def find_lots(rooms=None, max_payment=None):
     results.sort(key=lambda x: x.get("price", 0))
     return results
 
+def budget_counts(rooms=None):
+    """Считает кол-во вариантов в каждом диапазоне бюджета для данной комнатности."""
+    up25 = len(find_lots(rooms=rooms, max_payment=25000))
+    up40 = len(find_lots(rooms=rooms, max_payment=40000))
+    up60 = len(find_lots(rooms=rooms, max_payment=60000))
+    total = len(find_lots(rooms=rooms))
+    return {
+        "25000": up25,
+        "40000": up40 - up25,
+        "60000": up60 - up40,
+        "any":   total,
+    }
+
 # === Event tracking (fire-and-forget) ===
 def track_event(user_id, username, event_type, extra=None, lot=None, phone="", name="", journey_id=""):
     lot_meta = lot_payload(lot)
@@ -288,16 +301,23 @@ async def quiz_rooms(callback: CallbackQuery, state: FSMContext):
     await state.update_data(rooms=rooms, rooms_label=choice)
     track_event(user.id, user.username, "step_quiz_budget", {"rooms": choice})
 
+    counts = budget_counts(rooms=rooms)
+
+    def btn(label, key):
+        n = counts[key]
+        hint = f" · {n} вар." if n > 0 else " · нет"
+        return InlineKeyboardButton(text=f"{label}{hint}", callback_data=f"budget_{key}")
+
     await callback.message.answer(
         "💰 <b>Комфортный платёж в месяц?</b>\n\n"
         "<i>Подберём лучшие варианты и рассчитаем точный платёж</i>\n\n"
         "<i>Шаг 2 из 3</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="до 25 000 ₽", callback_data="budget_25000"),
-             InlineKeyboardButton(text="26 000–40 000 ₽", callback_data="budget_40000")],
-            [InlineKeyboardButton(text="41 000–60 000 ₽", callback_data="budget_60000"),
-             InlineKeyboardButton(text="Не важно", callback_data="budget_any")],
+            [btn("до 25 000 ₽", "25000"),
+             btn("26 000–40 000 ₽", "40000")],
+            [btn("41 000–60 000 ₽", "60000"),
+             btn("Не важно", "any")],
             [InlineKeyboardButton(text="← Назад", callback_data="how_it_works")],
         ])
     )
