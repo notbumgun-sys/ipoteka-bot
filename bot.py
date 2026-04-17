@@ -516,14 +516,23 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
         return
 
     # Show district selection
-    buttons = []
+    # Build description lines for active districts
+    desc_lines = []
+    active_btns = []
     for key, info in DISTRICTS.items():
         n = dcounts[key]
         if n > 0:
-            buttons.append([InlineKeyboardButton(
-                text=f"{info['label']} · {n} вар.",
+            desc_lines.append(f"{info['label']} — {info['hint']}")
+            active_btns.append(InlineKeyboardButton(
+                text=f"{info['label']} · {n}",
                 callback_data=f"district_{key}"
-            )])
+            ))
+
+    # Pair buttons into rows of 2
+    buttons = []
+    for i in range(0, len(active_btns), 2):
+        buttons.append(active_btns[i:i + 2])
+
     total = dcounts["any"]
     buttons.append([InlineKeyboardButton(
         text=f"🗺 Все районы · {total} вар.",
@@ -531,9 +540,11 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
     )])
     buttons.append([InlineKeyboardButton(text="← Назад", callback_data="change_budget")])
 
+    desc_text = "\n".join(desc_lines)
     await callback.message.answer(
-        "📍 <b>Какой район рассматриваете?</b>\n\n"
-        "<i>Шаг 3 из 4</i>",
+        f"📍 <b>Какой район рассматриваете?</b>\n\n"
+        f"{desc_text}\n\n"
+        f"<i>Шаг 3 из 4</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
