@@ -226,6 +226,12 @@ def is_duplicate_click(callback_id):
     _processed_callbacks[callback_id] = now
     return False
 
+# === Photo file_id cache (lot_id → Telegram file_id) ===
+_photo_cache: dict[str, str] = {}
+
+# === Per-user navigation lock (prevents double-sends while photo loads) ===
+_browse_locks: dict[int, bool] = {}
+
 # === States ===
 class Quiz(StatesGroup):
     waiting_rooms = State()
@@ -503,9 +509,13 @@ async def show_apartment(message, state: FSMContext, index: int):
     ])
 
     img = plan_url(lot)
-    if img:
+    cached = _photo_cache.get(lot_id)
+    photo = cached or img
+    if photo:
         try:
-            await message.answer_photo(photo=img, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+            sent = await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+            if not cached and sent.photo:
+                _photo_cache[lot_id] = sent.photo[-1].file_id
         except Exception as e:
             logger.error(f"Failed to send plan photo: {e}")
             await message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
@@ -542,11 +552,19 @@ async def browse(callback: CallbackQuery, state: FSMContext):
     if is_duplicate_click(callback.id):
         await callback.answer()
         return
+    user_id = callback.from_user.id
+    if _browse_locks.get(user_id):
+        await callback.answer("⏳ Загружаю…")
+        return
+    _browse_locks[user_id] = True
     await callback.answer()
-    index = int(callback.data.replace("browse_", ""))
-    user = callback.from_user
-    track_event(user.id, user.username, "browse_click", {"index": index})
-    await show_apartment(callback.message, state, index)
+    try:
+        index = int(callback.data.replace("browse_", ""))
+        user = callback.from_user
+        track_event(user.id, user.username, "browse_click", {"index": index})
+        await show_apartment(callback.message, state, index)
+    finally:
+        _browse_locks[user_id] = False
 
 @router.callback_query(F.data == "show_phone")
 async def show_phone(callback: CallbackQuery):
