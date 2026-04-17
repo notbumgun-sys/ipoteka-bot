@@ -38,6 +38,20 @@ TOP_RESULTS = 3
 
 FINISHING_MAP = {0: "Без отделки", 1: "Предчистовая", 2: "Чистовая", 3: "Предчистовая"}
 
+# Per-complex location info: (МКАД distance label, station line)
+PROJECT_TRAVEL = {
+    "1-й Химкинский":     ("7 км от МКАД",    "🚆 Химки (МЦД D3) · 🚗 10 мин"),
+    "1-й Шереметьевский": ("9 км от МКАД",    "🚆 Подрезково (МЦД D3) · 🚶 6 мин"),
+    "1-й Ленинградский":  ("6 км от МКАД",    "🚆 Молжаниново (МЦД D3) · 🚶 15 мин"),
+    "1-й Измайловский":   ("внутри МКАД",     "🚇 Щёлковская · 🚶 10 мин"),
+    "1-й Лермонтовский":  ("5 км от МКАД",    "🚆 Люберцы (МЦД D3) · 🚶 15 мин"),
+    "1-й Саларьевский":   ("2 км от МКАД",    "🚇 Саларьево · 🚶 5 мин"),
+    "1-й Ясеневский":     ("1 км от МКАД",    "🚇 Корниловская · 🚶 9 мин"),
+    "Южная Битца":        ("9 км от МКАД",    "🚆 Битца (МЦД D2) · 🚗 6 мин"),
+    "1-й Южный":          ("1 км от МКАД",    "🚆 Булатниково (МЦД D5) · 🚶 10 мин"),
+    "1-й Донской":        ("5 км от МКАД",    "🚆 Калинина (МЦД D5) · 🚶 15 мин"),
+}
+
 # === Load lots ===
 LOTS_PATH = Path(__file__).parent / "lots.json"
 lots_data = []
@@ -454,6 +468,14 @@ async def show_apartment(message, state: FSMContext, index: int):
     payment_str = f"от {format_price(payment)} ₽/мес" if payment else "уточняйте"
     finish = finishing_label(lot)
 
+    complex_name = lot.get("complex", "")
+    travel = PROJECT_TRAVEL.get(complex_name)
+    if travel:
+        mkad, station = travel
+        location_line = f"📍 {complex_name} · {mkad}\n{station}"
+    else:
+        location_line = "📍 Москва и Подмосковье"
+
     caption = (
         f"<b>{rooms_label(lot['rooms'])}, {lot['area']} м²</b>\n"
         f"Корпус {lot['corpus']} · {lot['floor']}/{lot['totalFloors']} эт.\n"
@@ -461,7 +483,7 @@ async def show_apartment(message, state: FSMContext, index: int):
         f"Сдача: {lot.get('deadlineLabel', '—')}\n\n"
         f"💰 Платёж: <b>{payment_str}</b>\n"
         f"Семейная ипотека от 6%\n\n"
-        f"📍 7 км от МКАД\n\n"
+        f"{location_line}\n\n"
         f"<i>{index + 1} из {total_shown} (всего {total_count})</i>"
     )
 
