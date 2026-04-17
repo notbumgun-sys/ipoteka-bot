@@ -455,7 +455,8 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
     await state.set_state(Quiz.browsing)
 
     if fallback_used and budget_choice != "any":
-        min_payment = adjusted_payment(results[0]) if results else 0
+        nonzero = [adjusted_payment(lot) for lot in results if adjusted_payment(lot) > 0]
+        min_payment = min(nonzero) if nonzero else 0
         budget_labels = {"25000": "до 25 000 ₽", "40000": "до 40 000 ₽", "60000": "до 60 000 ₽"}
         budget_str = budget_labels.get(budget_choice, f"до {budget_choice} ₽")
         await message.answer(
@@ -511,7 +512,7 @@ async def quiz_budget(callback: CallbackQuery, state: FSMContext):
         n = dcounts[key]
         if n > 0:
             buttons.append([InlineKeyboardButton(
-                text=f"{info['label']} · {n} вар.\n{info['hint']}",
+                text=f"{info['label']} · {n} вар.",
                 callback_data=f"district_{key}"
             )])
     total = dcounts["any"]
