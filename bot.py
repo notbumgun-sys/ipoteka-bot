@@ -331,7 +331,7 @@ class Quiz(StatesGroup):
 # === Router ===
 router = Router()
 
-# --- SCREEN 1: Hook ---
+# --- SCREEN 1: Rooms (direct entry, no hook screen) ---
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     user = message.from_user
@@ -342,29 +342,21 @@ async def cmd_start(message: Message, state: FSMContext):
         "start_param": start_param,
     })
 
-    min_payment = 0
-    payments = [adjusted_payment(l) for l in lots_data if adjusted_payment(l) > 0 and l.get("rooms") != 3]
-    if payments:
-        min_payment = min(payments)
-
-    await message.answer_photo(
-        photo=HERO_RENDER,
-        caption=(
-            "🏠 <b>Каждый месяц ты платишь за чужую квартиру.\n"
-            "А мог бы — за свою.</b>\n\n"
-            f"Квартира рядом с Москвой — от <b>{format_price(min_payment)} ₽/мес</b>\n"
-            "Без первоначального взноса. Ключи от 3 месяцев.\n"
-            "От 5 мин пешком до МЦД или метро.\n\n"
-            "Мы работаем напрямую с застройщиком. Подберём квартиру, поможем с ипотекой, сопроводим до ключей.\n\n"
-            "Давай проверим что тебе доступно 👇"
-        ),
+    await message.answer(
+        "Работаем напрямую с застройщиком — для тебя бесплатно.\n\n"
+        "Сколько комнат рассматриваешь? 👇\n"
+        "<i>Шаг 1 из 4</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Подобрать квартиру →", callback_data="how_it_works")]
+            [InlineKeyboardButton(text="Студия", callback_data="rooms_0"),
+             InlineKeyboardButton(text="1-комн", callback_data="rooms_1")],
+            [InlineKeyboardButton(text="2-комн", callback_data="rooms_2"),
+             InlineKeyboardButton(text="Любая", callback_data="rooms_any")],
         ])
     )
+    await state.set_state(Quiz.waiting_rooms)
 
-# --- SCREEN 2: How it works + rooms (step 1/3) ---
+# --- RESTART: Rooms (used by "Подобрать заново" and "← Другие параметры") ---
 @router.callback_query(F.data == "how_it_works")
 async def how_it_works(callback: CallbackQuery, state: FSMContext):
     if is_duplicate_click(callback.id):
@@ -376,12 +368,7 @@ async def how_it_works(callback: CallbackQuery, state: FSMContext):
     track_event(user.id, user.username, "step_how_it_works")
 
     await callback.message.answer(
-        "💡 <b>Как это работает — без подвоха:</b>\n\n"
-        "1️⃣ Отвечаешь на 3 вопроса — подбираем квартиры под твой платёж\n"
-        "2️⃣ Менеджер проверяет твою ситуацию и помогает одобрить ипотеку\n"
-        "3️⃣ Бронируем, сопровождаем на всех этапах, передаём ключи 🏠\n\n"
-        "<b>Для тебя это полностью бесплатно</b> — мы работаем напрямую с застройщиком.\n"
-        "Официальная программа. Государственная льготная ипотека от 6%.\n\n"
+        "Работаем напрямую с застройщиком — для тебя бесплатно.\n\n"
         "Сколько комнат рассматриваешь? 👇\n"
         "<i>Шаг 1 из 4</i>",
         parse_mode="HTML",
