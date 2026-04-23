@@ -207,14 +207,14 @@ def pick_diverse_lots(results, n=5):
                 added += 1
         if added == 0:
             break
-    # Fallback: fill remaining by price spread ignoring diversity
+    # Fallback: берём оставшиеся случайно (иначе повтор квиза с теми же
+    # параметрами показывает идентичный добор — см. user 8417623637)
     if len(selected) < n:
         extra = [l for l in results if l["id"] not in selected_ids]
         needed = n - len(selected)
         if extra:
-            step = (len(extra) - 1) / max(needed - 1, 1)
-            extras = [extra[min(round(i * step), len(extra) - 1)] for i in range(needed)]
-            selected.extend(extras)
+            random.shuffle(extra)
+            selected.extend(extra[:needed])
     return selected[:n]
 
 def district_counts(rooms=None, max_payment=None):
