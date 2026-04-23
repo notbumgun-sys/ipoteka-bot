@@ -453,6 +453,43 @@ async def change_budget(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Quiz.waiting_budget)
 
+# --- Widening helpers (when first search gave <10 results) ---
+@router.callback_query(F.data == "widen_district")
+async def widen_district(callback: CallbackQuery, state: FSMContext):
+    if is_duplicate_click(callback.id):
+        await callback.answer()
+        return
+    await callback.answer("Расширяю…")
+    user = callback.from_user
+    data = await state.get_data()
+    track_event(user.id, user.username, "widen_district")
+    await _do_show_results(
+        callback.message, state, user,
+        data.get("rooms"), data.get("rooms_label", ""),
+        data.get("max_payment"), data.get("budget_choice", "any"),
+        "any",
+    )
+
+
+@router.callback_query(F.data.startswith("widen_budget_"))
+async def widen_budget(callback: CallbackQuery, state: FSMContext):
+    if is_duplicate_click(callback.id):
+        await callback.answer()
+        return
+    await callback.answer("Расширяю…")
+    user = callback.from_user
+    data = await state.get_data()
+    nxt = callback.data.replace("widen_budget_", "")
+    max_payment = None if nxt == "any" else int(nxt)
+    track_event(user.id, user.username, "widen_budget", {"budget": nxt})
+    await state.update_data(budget_choice=nxt, max_payment=max_payment)
+    await _do_show_results(
+        callback.message, state, user,
+        data.get("rooms"), data.get("rooms_label", ""),
+        max_payment, nxt,
+        data.get("district", "any"),
+    )
+
 # --- Shared: find results and show cards ---
 async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_val,
                            max_payment, budget_choice, district):
@@ -480,6 +517,33 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
                             district=district)
     await state.set_state(Quiz.browsing)
 
+    # Подсказка «расширь поиск», если выборка узкая (<10) и есть куда расти
+    widen_buttons = []
+    if total_count < 10 and not fallback_used:
+        if d is not None:
+            wider_cnt = len(find_lots(rooms=rooms, max_payment=max_payment))
+            extra = wider_cnt - total_count
+            if extra >= 5:
+                widen_buttons.append(InlineKeyboardButton(
+                    text=f"🌍 +{extra} по всей Москве и МО",
+                    callback_data="widen_district",
+                ))
+        tiers = ["25000", "40000", "60000", "any"]
+        cur_idx = tiers.index(budget_choice) if budget_choice in tiers else -1
+        if 0 <= cur_idx < len(tiers) - 1:
+            nxt = tiers[cur_idx + 1]
+            nxt_max = None if nxt == "any" else int(nxt)
+            nxt_label = {"40000": "40 000 ₽",
+                         "60000": "60 000 ₽",
+                         "any": "без лимита"}.get(nxt, nxt)
+            wider_cnt = len(find_lots(rooms=rooms, max_payment=nxt_max, district=d))
+            extra = wider_cnt - total_count
+            if extra >= 5:
+                widen_buttons.append(InlineKeyboardButton(
+                    text=f"💰 +{extra} с платежом до {nxt_label}",
+                    callback_data=f"widen_budget_{nxt}",
+                ))
+
     if fallback_used and budget_choice != "any":
         nonzero = [adjusted_payment(lot) for lot in results if adjusted_payment(lot) > 0]
         min_payment = min(nonzero) if nonzero else 0
@@ -493,6 +557,14 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="← Другой бюджет", callback_data="change_budget")],
             ])
+        )
+    elif widen_buttons:
+        await message.answer(
+            f"🔥 Нашли <b>{total_count} вариантов</b> под твои параметры.\n\n"
+            f"💡 Хочешь больше выбора? Расширим поиск в один клик:\n\n"
+            f"Или смотри эти {len(top)} ниже 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[b] for b in widen_buttons]),
         )
     else:
         await message.answer(
