@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import random
 import aiohttp
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
@@ -176,11 +178,13 @@ def pick_diverse_lots(results, n=5):
     by_complex = defaultdict(lambda: defaultdict(list))
     for lot in sorted(results, key=lambda x: x.get("price", 0)):
         by_complex[lot.get("complex", "")][lot.get("rooms", -1)].append(lot)
-    # Order complexes by their cheapest lot
-    complex_order = sorted(
-        by_complex.keys(),
-        key=lambda c: min(v[0]["price"] for v in by_complex[c].values())
-    )
+    # Shuffle within each rooms bucket so same params → different lots each time
+    for c in by_complex:
+        for r in by_complex[c]:
+            random.shuffle(by_complex[c][r])
+    # Randomize complex order (otherwise "другие параметры" показывает то же самое)
+    complex_order = list(by_complex.keys())
+    random.shuffle(complex_order)
     selected = []
     selected_ids = set()
     used_rooms_per_complex = defaultdict(set)
@@ -637,11 +641,17 @@ async def show_apartment(message, state: FSMContext, index: int):
     if index < total_shown - 1:
         nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"browse_{index + 1}"))
 
+    want_msg = (
+        f"Здравствуйте! Интересует квартира №{lot.get('number', lot_id)} — "
+        f"{rooms_label(lot['rooms'])}, {lot['area']} м², "
+        f"{format_price(lot['price'])} ₽ (платёж от {format_price(payment)} ₽/мес)"
+    )
+    want_this_url = f"https://t.me/{MANAGER_USERNAME}?text={quote(want_msg)}"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         nav_buttons,
-        [InlineKeyboardButton(text="📞 Позвонить", callback_data="show_phone"),
-         InlineKeyboardButton(text="✍️ Написать", url=MANAGER_LINK)],
-        [InlineKeyboardButton(text="📱 Оставить номер — перезвоним", callback_data="leave_phone")],
+        [InlineKeyboardButton(text="💬 Хочу эту квартиру", url=want_this_url)],
+        [InlineKeyboardButton(text="✍️ Спросить у менеджера", url=MANAGER_LINK)],
         [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
     ])
 
@@ -685,6 +695,10 @@ async def send_final_cta(message, state: FSMContext):
                     f"{station}\n\n"
                 )
 
+    chat = message.chat
+    track_event(chat.id, getattr(chat, "username", None), "final_cta_shown",
+                {"shown": shown, "total_count": total_count})
+
     await message.answer(
         f"👆 <b>Показали {shown} из {total_count} вариантов.</b>\n\n"
         f"{emotional}"
@@ -693,9 +707,8 @@ async def send_final_cta(message, state: FSMContext):
         f"⬇️ <b>Как удобнее связаться?</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📞 Позвонить", callback_data="show_phone"),
-             InlineKeyboardButton(text="✍️ Написать", url=MANAGER_LINK)],
-            [InlineKeyboardButton(text="📱 Оставить номер — перезвоним", callback_data="leave_phone")],
+            [InlineKeyboardButton(text="💬 Обсудить с менеджером", url=MANAGER_LINK)],
+            [InlineKeyboardButton(text="📱 Оставить номер для связи", callback_data="leave_phone")],
             [InlineKeyboardButton(text="🌐 Все квартиры на сайте", url=SITE_URL)],
             [InlineKeyboardButton(text="🔄 Подобрать заново", callback_data="how_it_works")],
         ])
