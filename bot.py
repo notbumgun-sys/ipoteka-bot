@@ -10,12 +10,14 @@ from urllib.parse import quote
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    InputMediaPhoto,
 )
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramBadRequest
 
 from config import (
     BOT_TOKEN, WEBHOOK_URL, MANAGER_LINK, MANAGER_USERNAME,
@@ -513,8 +515,21 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
     top = pick_diverse_lots(results, n=TOP_RESULTS)
     lot_ids = [lot["id"] for lot in top]
 
+    # Kill the keyboard on the previous card (from an earlier selection) so
+    # its stale browse_* buttons can't stage-click into the new lot list.
+    prev_data = await state.get_data()
+    prev_card_id = prev_data.get("card_message_id")
+    if prev_card_id:
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=prev_card_id, reply_markup=None,
+            )
+        except Exception:
+            pass
+
     await state.update_data(lot_ids=lot_ids, browse_index=0, total_count=total_count,
-                            district=district)
+                            district=district, final_cta_sent=False,
+                            card_message_id=None)
     await state.set_state(Quiz.browsing)
 
     # Подсказка «расширь поиск», если выборка узкая (<10) и есть куда расти
@@ -649,6 +664,8 @@ async def quiz_district(callback: CallbackQuery, state: FSMContext):
     user = callback.from_user
     district = callback.data.replace("district_", "")
 
+    track_event(user.id, user.username, "step_quiz_district", {"district": district})
+
     data = await state.get_data()
     await _do_show_results(callback.message, state, user,
                            data.get("rooms"), data.get("rooms_label", ""),
@@ -656,33 +673,11 @@ async def quiz_district(callback: CallbackQuery, state: FSMContext):
                            district)
 
 # --- Apartment card ---
-async def show_apartment(message, state: FSMContext, index: int):
-    data = await state.get_data()
-    lot_ids = data.get("lot_ids", [])
-    total_shown = len(lot_ids)
-    total_count = data.get("total_count", total_shown)
+def _build_card(lot, index: int, total_shown: int, total_count: int):
+    """Build caption, keyboard, and photo source for a lot card.
 
-    if not lot_ids or index < 0 or index >= total_shown:
-        return
-
-    lot_id = lot_ids[index]
-    lot = next((l for l in lots_data if l["id"] == lot_id), None)
-    if not lot:
-        return
-
-    await state.update_data(browse_index=index)
-    track_event(
-        message.chat.id,
-        getattr(message.chat, "username", None),
-        "lot_shown",
-        {
-            "index": index,
-            "shown_total": total_shown,
-            "results_total": total_count,
-        },
-        lot=lot,
-    )
-
+    Shared by show_apartment (new message) and update_apartment (edit in place)."""
+    lot_id = lot["id"]
     payment = adjusted_payment(lot)
     payment_str = f"от {format_price(payment)} ₽/мес" if payment else "по запросу"
     finish = finishing_label(lot)
@@ -727,27 +722,111 @@ async def show_apartment(message, state: FSMContext, index: int):
         [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
     ])
 
-    img = plan_url(lot)
-    cached = _photo_cache.get(lot_id)
-    photo = cached or img
-    if photo:
-        try:
-            sent = await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML", reply_markup=keyboard)
-            if not cached and sent.photo:
-                _photo_cache[lot_id] = sent.photo[-1].file_id
-        except Exception as e:
-            logger.error(f"Failed to send plan photo: {e}")
-            await message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
-    else:
-        await message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
+    photo = _photo_cache.get(lot_id) or plan_url(lot)
+    return caption, keyboard, photo
 
-    # After last card — send CTA
+
+async def _resolve_card(state: FSMContext, index: int):
+    """Return (lot, total_shown, total_count) or None if index is out of range."""
+    data = await state.get_data()
+    lot_ids = data.get("lot_ids", [])
+    total_shown = len(lot_ids)
+    total_count = data.get("total_count", total_shown)
+    if not lot_ids or index < 0 or index >= total_shown:
+        return None
+    lot_id = lot_ids[index]
+    lot = next((l for l in lots_data if l["id"] == lot_id), None)
+    if not lot:
+        return None
+    return lot, total_shown, total_count
+
+
+async def _after_card_shown(message, state: FSMContext, lot, index: int,
+                            total_shown: int, total_count: int):
+    """Track lot_shown and trigger final CTA on the last card (once)."""
+    await state.update_data(browse_index=index)
+    track_event(
+        message.chat.id,
+        getattr(message.chat, "username", None),
+        "lot_shown",
+        {"index": index, "shown_total": total_shown, "results_total": total_count},
+        lot=lot,
+    )
     if index == total_shown - 1:
         await send_final_cta(message, state)
+
+
+async def show_apartment(message, state: FSMContext, index: int):
+    """Send a brand new card message. Used for the first card after the quiz,
+    after widen_search, and as a fallback from update_apartment."""
+    resolved = await _resolve_card(state, index)
+    if resolved is None:
+        return
+    lot, total_shown, total_count = resolved
+
+    caption, keyboard, photo = _build_card(lot, index, total_shown, total_count)
+    sent = None
+    if photo:
+        try:
+            sent = await message.answer_photo(
+                photo=photo, caption=caption, parse_mode="HTML", reply_markup=keyboard,
+            )
+            if sent.photo:
+                _photo_cache[lot["id"]] = sent.photo[-1].file_id
+        except Exception as e:
+            logger.error(f"Failed to send plan photo: {e}")
+            sent = await message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        sent = await message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
+
+    if sent is not None:
+        await state.update_data(card_message_id=sent.message_id)
+
+    await _after_card_shown(message, state, lot, index, total_shown, total_count)
+
+
+async def update_apartment(callback: CallbackQuery, state: FSMContext, index: int):
+    """Edit the existing card message in place via edit_media. Keeps chat clean
+    and prevents stale keyboards from piling up.
+
+    Falls back to show_apartment (new message) if edit fails — e.g. the source
+    message is older than 48h or the media can't be fetched."""
+    resolved = await _resolve_card(state, index)
+    if resolved is None:
+        return
+    lot, total_shown, total_count = resolved
+
+    caption, keyboard, photo = _build_card(lot, index, total_shown, total_count)
+
+    try:
+        edited = await callback.message.edit_media(
+            media=InputMediaPhoto(media=photo, caption=caption, parse_mode="HTML"),
+            reply_markup=keyboard,
+        )
+        if getattr(edited, "photo", None):
+            _photo_cache[lot["id"]] = edited.photo[-1].file_id
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if "not modified" in msg:
+            # User clicked the button that leads to the current card (edge case)
+            pass
+        else:
+            logger.warning(f"edit_media failed ({e}); falling back to new message")
+            await show_apartment(callback.message, state, index)
+            return
+    except Exception as e:
+        logger.error(f"edit_media unexpected error: {e}")
+        await show_apartment(callback.message, state, index)
+        return
+
+    await _after_card_shown(callback.message, state, lot, index, total_shown, total_count)
 
 # --- FINAL CTA after last card ---
 async def send_final_cta(message, state: FSMContext):
     data = await state.get_data()
+    if data.get("final_cta_sent"):
+        return
+    await state.update_data(final_cta_sent=True)
     total_count = data.get("total_count", 0)
     lot_ids = data.get("lot_ids", [])
     shown = len(lot_ids)
@@ -801,7 +880,7 @@ async def browse(callback: CallbackQuery, state: FSMContext):
         index = int(callback.data.replace("browse_", ""))
         user = callback.from_user
         track_event(user.id, user.username, "browse_click", {"index": index})
-        await show_apartment(callback.message, state, index)
+        await update_apartment(callback, state, index)
     finally:
         _browse_locks[user_id] = False
 
