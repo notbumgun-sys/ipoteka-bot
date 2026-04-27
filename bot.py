@@ -228,13 +228,13 @@ def district_counts(rooms=None, max_payment=None):
 
 def budget_counts(rooms=None):
     """Считает кол-во вариантов в каждом диапазоне бюджета для данной комнатности."""
-    up25 = len(find_lots(rooms=rooms, max_payment=25000))
+    up30 = len(find_lots(rooms=rooms, max_payment=30000))
     up40 = len(find_lots(rooms=rooms, max_payment=40000))
     up60 = len(find_lots(rooms=rooms, max_payment=60000))
     total = len(find_lots(rooms=rooms))
     return {
-        "25000": up25,
-        "40000": up40 - up25,
+        "30000": up30,
+        "40000": up40 - up30,
         "60000": up60 - up40,
         "any":   total,
     }
@@ -415,8 +415,8 @@ async def quiz_rooms(callback: CallbackQuery, state: FSMContext):
         "<i>Шаг 2 из 4</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [btn("до 25 000 ₽", "25000"),
-             btn("26 000–40 000 ₽", "40000")],
+            [btn("до 30 000 ₽", "30000"),
+             btn("31 000–40 000 ₽", "40000")],
             [btn("41 000–60 000 ₽", "60000"),
              btn("Не важно", "any")],
             [InlineKeyboardButton(text="← Назад", callback_data="how_it_works")],
@@ -447,8 +447,8 @@ async def change_budget(callback: CallbackQuery, state: FSMContext):
         "<i>Шаг 2 из 4</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [btn("до 25 000 ₽", "25000"),
-             btn("26 000–40 000 ₽", "40000")],
+            [btn("до 30 000 ₽", "30000"),
+             btn("31 000–40 000 ₽", "40000")],
             [btn("41 000–60 000 ₽", "60000"),
              btn("Не важно", "any")],
             [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
@@ -533,6 +533,14 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
                             card_message_id=None)
     await state.set_state(Quiz.browsing)
 
+    unique_complexes = len({l.get("complex", "") for l in results})
+    single_complex = (
+        unique_complexes <= 1
+        and district != "any"
+        and not fallback_used
+        and total_count > 0
+    )
+
     # Подсказка «расширь поиск», если выборка узкая (<10) и есть куда расти
     widen_buttons = []
     if total_count < 10 and not fallback_used:
@@ -544,7 +552,7 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
                     text=f"🌍 +{extra} по всей Москве и МО",
                     callback_data="widen_district",
                 ))
-        tiers = ["25000", "40000", "60000", "any"]
+        tiers = ["30000", "40000", "60000", "any"]
         cur_idx = tiers.index(budget_choice) if budget_choice in tiers else -1
         if 0 <= cur_idx < len(tiers) - 1:
             nxt = tiers[cur_idx + 1]
@@ -560,10 +568,29 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
                     callback_data=f"widen_budget_{nxt}",
                 ))
 
-    if fallback_used and budget_choice != "any":
+    if single_complex:
+        district_label = DISTRICTS.get(district, {}).get("label", "выбранном районе")
+        hint_buttons = [[InlineKeyboardButton(text="🌍 Все районы", callback_data="widen_district")]]
+        tiers = ["30000", "40000", "60000", "any"]
+        if budget_choice in tiers:
+            cur_idx = tiers.index(budget_choice)
+            if cur_idx < len(tiers) - 1:
+                nxt = tiers[cur_idx + 1]
+                nxt_label = {"40000": "40 000 ₽", "60000": "60 000 ₽", "any": "без лимита"}.get(nxt, nxt)
+                hint_buttons.append([InlineKeyboardButton(
+                    text=f"💰 Поднять бюджет до {nxt_label}",
+                    callback_data=f"widen_budget_{nxt}",
+                )])
+        await message.answer(
+            f"💡 В <b>{district_label}</b> по этим параметрам подходящие варианты есть только в одном ЖК.\n\n"
+            f"Хочешь варианты из разных ЖК? Можно расширить район или бюджет 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=hint_buttons),
+        )
+    elif fallback_used and budget_choice != "any":
         nonzero = [adjusted_payment(lot) for lot in results if adjusted_payment(lot) > 0]
         min_payment = min(nonzero) if nonzero else 0
-        budget_labels = {"25000": "до 25 000 ₽", "40000": "до 40 000 ₽", "60000": "до 60 000 ₽"}
+        budget_labels = {"30000": "до 30 000 ₽", "40000": "до 40 000 ₽", "60000": "до 60 000 ₽"}
         budget_str = budget_labels.get(budget_choice, f"до {budget_choice} ₽")
         await message.answer(
             f"💡 С платежом <b>{budget_str}</b> пока нет точных совпадений.\n\n"
