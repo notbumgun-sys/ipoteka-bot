@@ -431,6 +431,8 @@ async def change_budget(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     await callback.answer()
+    user = callback.from_user
+    track_event(user.id, user.username, "back_pressed", {"from": "district"})
     data = await state.get_data()
     rooms = data.get("rooms")
     rooms_label = data.get("rooms_label", "")
@@ -505,12 +507,33 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
         "district": district, "count": exact_count,
     })
 
-    fallback_used = False
-    if not results:
-        fallback_used = True
-        results = find_lots(rooms=rooms, district=d)
-        if not results:
-            results = find_lots()
+    if exact_count == 0:
+        track_event(user.id, user.username, "fallback_dead_end", {
+            "rooms": rooms_label_val, "budget": budget_choice, "district": district,
+        })
+        tiers = ["30000", "40000", "60000", "any"]
+        buttons = []
+        if budget_choice in tiers:
+            cur_idx = tiers.index(budget_choice)
+            if cur_idx < len(tiers) - 1:
+                nxt = tiers[cur_idx + 1]
+                nxt_label = {"40000": "40 000 ₽", "60000": "60 000 ₽", "any": "без лимита"}.get(nxt, nxt)
+                buttons.append([InlineKeyboardButton(
+                    text=f"💰 Поднять бюджет до {nxt_label}",
+                    callback_data=f"widen_budget_{nxt}",
+                )])
+        buttons.append([InlineKeyboardButton(text="🔄 Изменить параметры", callback_data="how_it_works")])
+        budget_labels = {"30000": "до 30 000 ₽", "40000": "до 40 000 ₽",
+                         "60000": "до 60 000 ₽", "any": "без лимита"}
+        budget_str = budget_labels.get(budget_choice, f"до {budget_choice} ₽")
+        rooms_str = rooms_label_val or "выбранным параметрам"
+        await message.answer(
+            f"😕 По параметрам <b>{rooms_str}</b> с платежом <b>{budget_str}</b> сейчас вариантов нет.\n\n"
+            f"Можем поднять бюджет или изменить параметры 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        return
 
     total_count = len(results)
     top = pick_diverse_lots(results, n=TOP_RESULTS)
@@ -534,16 +557,11 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
     await state.set_state(Quiz.browsing)
 
     unique_complexes = len({l.get("complex", "") for l in results})
-    single_complex = (
-        unique_complexes <= 1
-        and district != "any"
-        and not fallback_used
-        and total_count > 0
-    )
+    single_complex = unique_complexes <= 1 and district != "any" and total_count > 0
 
     # Подсказка «расширь поиск», если выборка узкая (<10) и есть куда расти
     widen_buttons = []
-    if total_count < 10 and not fallback_used:
+    if total_count < 10:
         if d is not None:
             wider_cnt = len(find_lots(rooms=rooms, max_payment=max_payment))
             extra = wider_cnt - total_count
@@ -586,20 +604,6 @@ async def _do_show_results(message, state: FSMContext, user, rooms, rooms_label_
             f"Хочешь варианты из разных ЖК? Можно расширить район или бюджет 👇",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=hint_buttons),
-        )
-    elif fallback_used and budget_choice != "any":
-        nonzero = [adjusted_payment(lot) for lot in results if adjusted_payment(lot) > 0]
-        min_payment = min(nonzero) if nonzero else 0
-        budget_labels = {"30000": "до 30 000 ₽", "40000": "до 40 000 ₽", "60000": "до 60 000 ₽"}
-        budget_str = budget_labels.get(budget_choice, f"до {budget_choice} ₽")
-        await message.answer(
-            f"💡 С платежом <b>{budget_str}</b> пока нет точных совпадений.\n\n"
-            f"Показываем ближайшие варианты — платёж от <b>{format_price(min_payment)} ₽/мес</b>.\n"
-            f"Это всё равно выгоднее аренды 🏠",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="← Другой бюджет", callback_data="change_budget")],
-            ])
         )
     elif widen_buttons:
         await message.answer(
@@ -871,12 +875,19 @@ async def send_final_cta(message, state: FSMContext):
     track_event(chat.id, getattr(chat, "username", None), "final_cta_shown",
                 {"shown": shown, "total_count": total_count})
 
+    remaining = max(total_count - shown, 0)
+    remaining_line = (
+        f"Под ваш платёж есть ещё <b>{remaining} вариантов</b> — пришлём подборку лично, "
+        f"с точным расчётом ипотеки и помощью с одобрением.\n"
+        if remaining > 0
+        else "Менеджер рассчитает точный платёж и поможет с одобрением ипотеки.\n"
+    )
     await message.answer(
         f"👆 <b>Показали {shown} из {total_count} вариантов.</b>\n\n"
         f"{emotional}"
-        f"Менеджер <b>бесплатно</b> подберёт остальные, рассчитает точный платёж и поможет с одобрением.\n"
-        f"Никаких обязательств.\n\n"
-        f"⬇️ <b>Как удобнее связаться?</b>",
+        f"{remaining_line}"
+        f"Бесплатно. Без обязательств.\n\n"
+        f"⬇️ <b>Оставьте номер — перезвоним в течение часа</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Обсудить с менеджером", url=MANAGER_LINK)],
@@ -895,10 +906,14 @@ async def browse(callback: CallbackQuery, state: FSMContext):
     if _browse_locks.get(user_id):
         await callback.answer("⏳ Загружаю…")
         return
+    index = int(callback.data.replace("browse_", ""))
+    data = await state.get_data()
+    if data.get("browse_index") == index:
+        await callback.answer()
+        return
     _browse_locks[user_id] = True
     await callback.answer()
     try:
-        index = int(callback.data.replace("browse_", ""))
         user = callback.from_user
         track_event(user.id, user.username, "browse_click", {"index": index})
         await update_apartment(callback, state, index)
