@@ -5,7 +5,6 @@ import random
 import aiohttp
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
@@ -60,19 +59,7 @@ DISTRICTS = {
     },
 }
 
-# Per-complex location info: (МКАД distance label, station line)
-PROJECT_TRAVEL = {
-    "1-й Химкинский":     ("7 км от МКАД",    "🚆 Химки (МЦД D3) · 🚗 10 мин"),
-    "1-й Шереметьевский": ("9 км от МКАД",    "🚆 Подрезково (МЦД D3) · 🚶 6 мин"),
-    "1-й Ленинградский":  ("6 км от МКАД",    "🚆 Молжаниново (МЦД D3) · 🚶 15 мин"),
-    "1-й Измайловский":   ("внутри МКАД",     "🚇 Щёлковская · 🚶 10 мин"),
-    "1-й Лермонтовский":  ("5 км от МКАД",    "🚆 Люберцы (МЦД D3) · 🚶 15 мин"),
-    "1-й Саларьевский":   ("2 км от МКАД",    "🚇 Саларьево · 🚶 5 мин"),
-    "1-й Ясеневский":     ("1 км от МКАД",    "🚇 Корниловская · 🚶 9 мин"),
-    "Южная Битца":        ("9 км от МКАД",    "🚆 Битца (МЦД D2) · 🚗 6 мин"),
-    "1-й Южный":          ("1 км от МКАД",    "🚆 Булатниково (МЦД D5) · 🚶 10 мин"),
-    "1-й Донской":        ("5 км от МКАД",    "🚆 Калинина (МЦД D5) · 🚶 15 мин"),
-}
+COMPLEX_TO_DISTRICT = {c: did for did, info in DISTRICTS.items() for c in info["complexes"]}
 
 # === Load lots ===
 LOTS_PATH = Path(__file__).parent / "lots.json"
@@ -683,10 +670,10 @@ def _build_card(lot, index: int, total_shown: int, total_count: int):
     finish = finishing_label(lot)
 
     complex_name = lot.get("complex", "")
-    travel = PROJECT_TRAVEL.get(complex_name)
-    if travel:
-        mkad, station = travel
-        location_line = f"📍 {mkad}\n{station}"
+    district_id = COMPLEX_TO_DISTRICT.get(complex_name)
+    if district_id:
+        d = DISTRICTS[district_id]
+        location_line = f"📍 {d['label']}\n{d['hint']}"
     else:
         location_line = "📍 Москва и Подмосковье"
 
@@ -708,16 +695,9 @@ def _build_card(lot, index: int, total_shown: int, total_count: int):
     if index < total_shown - 1:
         nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"browse_{index + 1}"))
 
-    want_msg = (
-        f"Здравствуйте! Интересует квартира №{lot.get('number', lot_id)} — "
-        f"{rooms_label(lot['rooms'])}, {lot['area']} м², "
-        f"{format_price(lot['price'])} ₽ (платёж от {format_price(payment)} ₽/мес)"
-    )
-    want_this_url = f"https://t.me/{MANAGER_USERNAME}?text={quote(want_msg)}"
-
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         nav_buttons,
-        [InlineKeyboardButton(text="💬 Хочу эту квартиру", url=want_this_url)],
+        [InlineKeyboardButton(text="💬 Хочу эту квартиру", callback_data=f"want_{lot_id}")],
         [InlineKeyboardButton(text="✍️ Спросить у менеджера", url=MANAGER_LINK)],
         [InlineKeyboardButton(text="← Другие параметры", callback_data="how_it_works")],
     ])
@@ -837,13 +817,13 @@ async def send_final_cta(message, state: FSMContext):
         last_lot = next((l for l in lots_data if l["id"] == lot_ids[-1]), None)
         if last_lot:
             payment = adjusted_payment(last_lot)
-            travel = PROJECT_TRAVEL.get(last_lot.get("complex", ""))
-            if payment and travel:
-                _, station = travel
+            district_id = COMPLEX_TO_DISTRICT.get(last_lot.get("complex", ""))
+            if payment and district_id:
+                d = DISTRICTS[district_id]
                 emotional = (
                     f"💡 Смотри: <b>{format_price(payment)} ₽/мес</b> — "
                     f"и это уже твоя квартира, не чужая.\n"
-                    f"{station}\n\n"
+                    f"📍 {d['label']}\n\n"
                 )
 
     chat = message.chat
@@ -899,6 +879,23 @@ async def show_phone(callback: CallbackQuery):
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery):
     await callback.answer()
+
+# --- Want this lot: lock lot_id, then collect phone ---
+@router.callback_query(F.data.startswith("want_"))
+async def want_lot(callback: CallbackQuery, state: FSMContext):
+    if is_duplicate_click(callback.id):
+        await callback.answer()
+        return
+    await callback.answer()
+    user = callback.from_user
+    lot_id = callback.data.replace("want_", "")
+    await state.update_data(lot_ids=[lot_id], browse_index=0, total_count=1)
+    track_event(user.id, user.username, "step_want_lot", {"lot_id": lot_id})
+    await callback.message.answer(
+        "👤 Как к вам обращаться? Напишите ваше имя.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.set_state(Quiz.waiting_name)
 
 # --- Phone collection ---
 @router.callback_query(F.data == "leave_phone")
